@@ -1,0 +1,476 @@
+#!/bin/bash
+# /etc/init.d/minecraft
+
+### BEGIN INIT INFO
+# Provides:   minecraft
+# Required-Start: $local_fs $remote_fs $all
+# Required-Stop:  $local_fs $remote_fs $all
+# Should-Start:   $network
+# Should-Stop:    $network
+# Default-Start:  2 3 4 5
+# Default-Stop:   0 1 6
+# Short-Description:    Minecraft server
+# Description:    Init script for minecraft/bukkit server, with rolling logs and use of ramdisk for less lag.
+### END INIT INFO
+
+# Created by Ahtenus
+
+# Based on http://www.minecraftwiki.net/wiki/Server_startup_script
+# Support for multiworld by Benni-chan
+# Log rolls without needing restarts by Solorvox
+# Option for killing server in an emergency by jbondhus
+
+# Loads config file
+
+if [ -L "$0" ]
+then
+	source $(readlink -e $0 | sed "s:[^/]*$:config:")
+else
+	source "echo $0 | sed s:[^/]*$:config:"
+fi
+
+if [ "$SERVICE" == "" ]
+then
+	echo "Couldn't load config file, please edit config.example and rename it to config"
+	logger -t minecraft-init "Couldn't load config file, please edit config.example and rename it to config"
+	exit
+fi
+
+ME=`whoami`
+as_user() {
+	if [ $ME == $USERNAME ] ; then
+		bash -c "$1"
+	else
+		su $USERNAME -s /bin/bash -c "$1"
+	fi
+}
+
+is_running() {
+	# Checks for the minecraft servers screen session
+	# returns true if it exists.
+	pidfile="${MCPATH}"/"${SCREEN}".pid
+
+	if [ -f "$pidfile" ]
+	then
+		pid=$(head -1 "$pidfile")
+		if ps ax | grep -v grep | grep "${pid}" | grep "${SCREEN}" > /dev/null
+		then
+			return 0
+		else
+			if [ -z "$isInStop" ]
+			then
+				if [ -z "$roguePrinted" ]
+				then
+					roguePrinted=1
+					echo "Rogue pidfile found!"
+				fi
+			fi
+			return 1
+		fi
+	else
+		if ps ax | grep -v grep | grep "${SCREEN} ${INVOCATION}" > /dev/null
+		then
+			echo "No pidfile found, but server's running."
+			echo "Re-creating the pidfile."
+
+			pid=$(ps ax | grep -v grep | grep "${SCREEN} ${INVOCATION}" | cut -f1 -d' ')
+			check_permissions
+			as_user "echo $pid > $pidfile"
+
+			return 0
+		else
+			return 1
+		fi
+	fi
+}
+
+datepath() {
+	# datepath path filending-to-check returned-filending
+
+	# Returns an file path with added date between the filename and file ending.
+	# $1 filepath (not including file ending)
+	# $2 file ending to check for uniqueness
+	# $3 file ending to return
+
+	if [ -e "$1$(date +%F)$2" ]
+	then
+		echo "$1$(date +%FT%T)$3"
+	else
+		echo "$1$(date +%F)$3"
+	fi
+}
+
+mc_start() {
+	servicejar="$MCPATH"/"$SERVICE"
+	echo "$servicejar"
+  if [ ! -f "$servicejar" ]
+	then
+		echo "Failed to start: Can't find the specified Minecraft jar under $servicejar. Please check your config!"
+		exit 1
+	fi
+
+	pidfile="${MCPATH}"/"${SCREEN}".pid
+	check_permissions
+
+	as_user "cd $MCPATH && screen -dmS $SCREEN $INVOCATION"
+	as_user "screen -list | grep \.$SCREEN | cut -f1 -d'.' | head -n 1 | tr -d -c 0-9 > $pidfile"
+
+	#
+	# Waiting for the server to start
+	#
+	seconds=0
+	until is_running
+	do
+		sleep 1
+		seconds=$seconds+1
+		if [[ $seconds -eq 5 ]]
+		then
+			echo "Still not running, waiting a while longer..."
+		fi
+		if [[ $seconds -ge 120 ]]
+		then
+			echo "Failed to start, aborting."
+			exit 1
+		fi
+	done
+	echo "$SERVICE is running."
+}
+
+mc_command() {
+	if is_running
+	then
+			as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"$(eval echo "$FORMAT")\"\015'"
+	else
+			echo "$SERVICE was not running. Not able to run command."
+	fi
+}
+
+mc_saveoff() {
+	if is_running
+	then
+		echo "$SERVICE is running... suspending saves"
+		mc_command save-off
+		mc_command save-all
+		sync
+		sleep 10
+	else
+		echo "$SERVICE was not running. Not suspending saves."
+	fi
+}
+
+mc_saveon() {
+	if is_running
+	then
+		echo "$SERVICE is running... re-enabling saves"
+		mc_command save-on
+	else
+		echo "$SERVICE was not running. Not resuming saves."
+	fi
+}
+
+mc_say() {
+	if is_running
+	then
+		echo "Said: $1"
+		mc_command "say $1"
+	else
+		echo "$SERVICE was not running. Not able to say anything."
+	fi
+}
+
+mc_stop() {
+	pidfile="${MCPATH}"/"${SCREEN}".pid
+	#
+	# Stops the server
+	#
+	echo "Saving worlds..."
+	mc_command save-all
+	sleep 10
+	echo "Stopping server..."
+	mc_command stop
+	sleep 0.5
+	#
+	# Waiting for the server to shut down
+	#
+	seconds=0
+	isInStop=1
+	while is_running
+	do
+		sleep 1
+		seconds=$seconds+1
+		if [[ $seconds -eq 5 ]]
+		then
+			echo "Still not shut down, waiting a while longer..."
+		fi
+		if [[ $seconds -ge 120 ]]
+		then
+			logger -t minecraft-init "Failed to shut down server, aborting."
+			echo "Failed to shut down, aborting."
+			exit 1
+		fi
+	done
+	as_user "rm $pidfile"
+	unset isInStop
+	is_running
+	echo "$SERVICE is now shut down."
+}
+
+mc_reload() {
+        echo "$SERVICE is running... reloading."
+        mc_command reload
+}
+
+check_backup_settings() {
+	case "$BACKUPFORMAT" in
+		tar)
+			COMPRESSCMD="tar -hcjf"
+			STORECMD="tar -cpf"
+			ARCHIVEENDING=".tar.bz2"
+			STOREDENDING=".tar"
+			EXCLUDEARG="-X "
+			;;
+		zip)
+			COMPRESSCMD="zip -rq"
+			STORECMD="zip -rq -0"
+			ARCHIVEENDING=".zip"
+			STOREDENDING=".zip"
+			EXCLUDEARG="-x@"
+			;;
+		*)
+			echo "$BACKUPFORMAT is not a supported backup format"
+			exit 1
+			;;
+	esac
+}
+
+get_worlds() {
+	SAVEIFS=$IFS
+	IFS=$(echo -en "\n\b")
+
+	a=1
+  for NAME in $(ls "$WORLDSTORAGE")
+	do
+		if [ -d "$WORLDSTORAGE"/"$NAME" ]
+		then
+			WORLDNAME[$a]=$NAME
+      a=$a+1
+		fi
+	done
+
+	IFS=$SAVEIFS
+}
+
+mc_world_backup() {
+	check_backup_settings
+	get_worlds
+	today=$(date +%F)
+	as_user "mkdir -p $BACKUPPATH"
+
+	for INDEX in "${!WORLDNAME[@]}"
+	do
+		echo "Backing up minecraft ${WORLDNAME[$INDEX]}"
+		as_user "mkdir -p $BACKUPPATH/${today}"
+		path=$(datepath "$BACKUPPATH"/"${today}"/"${WORLDNAME[$INDEX]}"_ "$ARCHIVEENDING" "$ARCHIVEENDING")
+		as_user "$COMPRESSCMD $path $MCPATH/${WORLDNAME[$INDEX]}"
+	done
+}
+
+check_links() {
+	get_worlds
+	for INDEX in "${!WORLDNAME[@]}"
+	do
+		if [[ -L "$MCPATH"/"${WORLDNAME[$INDEX]}" || ! -a "$MCPATH"/"${WORLDNAME[$INDEX]}" ]]
+		then
+			link=$(ls -l "$MCPATH"/"${WORLDNAME[$INDEX]}" | awk '{print $11}')
+			if [ "$link" != "${WORLDSTORAGE}/${WORLDNAME[$INDEX]}" ]
+				then
+					as_user "rm -f $MCPATH/${WORLDNAME[$INDEX]}"
+					as_user "ln -s ${WORLDSTORAGE}/${WORLDNAME[$INDEX]} $MCPATH/${WORLDNAME[$INDEX]}"
+					echo "Created link for ${WORLDNAME[$INDEX]}"
+			fi
+		else
+			echo "Could not process the world named '${WORLDNAME[$INDEX]}'. Please move all worlds to ${WORLDSTORAGE}."
+			exit 1
+		fi
+	done
+}
+
+force_exit() {  # Kill the server running (messily) in an emergency
+	echo ""
+	echo "SIGINIT CALLED - FORCE EXITING!"
+	pidfile="${MCPATH}"/"${SCREEN}".pid
+	rm "$pidfile"
+	echo "KILLING SERVER PROCESSES!!!"
+		# Display which processes are being killed
+		ps aux | grep -e 'java -Xmx' | grep -v grep | awk '{print $2}' | xargs -i echo "Killing PID: " {}
+		ps aux | grep -e 'SCREEN -dmS minecraft java' | grep -v grep | awk '{print $2}' | xargs -i echo "Killing PID: " {}
+		ps aux | grep -e '/etc/init.d/minecraft' | grep -v grep | awk '{print $2}' | xargs -i echo "Killing PID: " {}
+
+		# Kill the processes
+		ps aux | grep -e 'java -Xmx' | grep -v grep | awk '{print $2}' | xargs -i kill {}
+		ps aux | grep -e 'SCREEN -dmS minecraft java' | grep -v grep | awk '{print $2}' | xargs -i kill {}
+		ps aux | grep -e '/etc/init.d/minecraft' | grep -v grep | awk '{print $2}' | xargs -i kill {}
+
+	exit 1
+}
+
+get_script_location() {
+	echo $(dirname "$(readlink -e "$0")")
+}
+
+check_permissions() {
+	as_user "touch $pidfile"
+	if ! as_user "test -w '$pidfile'" ; then
+		echo "Check Permissions. Cannot write to $pidfile. Correct the permissions and then excute: $0 status"
+	fi
+}
+
+trap force_exit SIGINT
+
+case "$1" in
+	start)
+		# Starts the server
+		if is_running; then
+			echo "Server already running."
+		else
+			check_links
+			mc_start
+		fi
+		;;
+	stop)
+		# Stops the server
+		if is_running; then
+			mc_say "SERVER SHUTTING DOWN!"
+			mc_stop
+		else
+			echo "No running server."
+		fi
+		;;
+	restart)
+		# Restarts the server
+		if is_running; then
+			mc_say "SERVER REBOOT IN 10 SECONDS!"
+			mc_stop
+		else
+			echo "No running server, starting it..."
+		fi
+		check_links
+		mc_start
+		;;
+  reload)
+    # Reloads server configuration
+    if is_running; then
+      mc_say "Reloading server configuration.."
+      mc_reload
+    else
+      echo "No running server."
+    fi
+    ;;
+	backup)
+		# Backups world
+		if is_running; then
+			mc_say "Backing up world."
+			mc_saveoff
+			mc_world_backup
+			mc_saveon
+			mc_say "Backup complete."
+		else
+			mc_world_backup
+		fi
+		;;
+	status)
+		# Shows server status
+		if is_running
+		then
+			echo "$SERVICE is running."
+		else
+			echo "$SERVICE is not running."
+		fi
+		;;
+	links)
+		check_links
+		;;
+	worlds)
+		get_worlds
+		for INDEX in "${!WORLDNAME[@]}"
+		do
+			echo "${WORLDNAME[$INDEX]}"
+		done
+		;;
+	screen)
+		if is_running; then
+			as_user "script /dev/null -q -c \"screen -rx $SCREEN\""
+		else
+		echo "Server is not running. Do you want to start it?"
+		echo "Please put \"Yes\", or \"No\": "
+		read -r START_SERVER
+		case "$START_SERVER" in
+			[Yy]|[Yy][Ee][Ss])
+				check_links
+				mc_start
+				as_user "script /dev/null -q -c \"screen -rx $SCREEN\""
+				;;
+			[Nn]|[Nn][Oo])
+				clear
+				echo "Aborting startup!"
+				sleep 1
+				clear
+				exit 1
+				;;
+			*)
+				clear
+				echo "Invalid input"
+				sleep 1
+				clear
+				exit 1
+				;;
+		esac
+		fi
+		;;
+	kill)
+		WIDTH=$(stty size | cut -d ' ' -f 2)            # Get terminal's character width
+		pstree | grep MDSImporte | cut -c 1-"${WIDTH}"   # Chop output after WIDTH chars
+
+		echo "Killing the server is an EMERGENCY procedure, and should not be used to perform a normal shutdown! All changes younger than 15 minutes could be permanantly lost and WORLD CORRUPTION is possible! Are you ABSOLUTELY POSITIVE this is what you want to do?"
+		echo "Please put \"Yes\", or \"No\": "
+		read -r KILL_SERVER
+		case "$KILL_SERVER" in  # Determine which option was specified
+			[Yy]|[Yy][Ee][Ss])      # If yes, kill the server
+				echo "KILLING SERVER PROCESSES!!!"
+				force_exit
+				exit 1
+				;;
+			[Nn]|[Nn][Oo])  # If no, abort and exit 1
+				echo "Aborting!"
+				exit 1
+				;;
+			*)      # If anything else, exit 1
+				echo "Error: Invalid Input!"
+				exit 1
+				;;
+		esac
+		;;
+	help|--help|-h)
+		echo "Usage: $0 COMMAND"
+		echo
+		echo "Available commands:"
+		echo -e "   start \t\t Starts the server"
+		echo -e "   stop \t\t Stops the server"
+		echo -e "   kill \t\t Kills the server"
+		echo -e "   restart \t\t Restarts the server"
+		echo -e "   reload \t\t Reloads the server configuration"
+		echo -e "   backup \t\t Backups the worlds defined in the script"
+		echo -e "   save-off \t\t Flushes the world to disk and then disables saving"
+		echo -e "   save-on \t\t Re-enables saving if it was previously disabled by save-off"
+		echo -e "   status \t\t Displays server status"
+		echo -e "   links \t\t Creates nessesary symlinks"
+		echo -e "   worlds \t\t Displays a list of available worlds"
+		echo -e "   screen \t\t Shows the server screen"
+		;;
+	*)
+		echo "No such command, see $0 help"
+		exit 1
+		;;
+esac
+
+exit 0
