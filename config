@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# Settings file for minecraft-init
+# ================================
+#
+
+# Name of server.jar to use
+SERVICE="KCauldron.jar"
+
+# Name to use for the screen instance
+SCREEN="mcsrv_screen"
+
+# User that should run the server
+USERNAME="baldr"
+
+# Path to minecraft server directory 
+MCPATH="/opt/mc/server"
+
+# Where the worlds are located on the disk. Can not be the same as MCPATH.
+# You need to move your worlds to this directory manually, the script
+# will then handle the nessessay symlinks.
+WORLDSTORAGE="/opt/mc/worlds"
+
+# Number of CPUs/cores to use
+CPU_COUNT=8
+
+# Initial memory usage
+INITMEM="512M"
+
+# Maximum amount of memory to use
+# Remember: give the ramdisk enough space, subtract from the total amount
+# of RAM available the size of your map and the RAM-consumption of your base system.
+MAXMEM="14336M"
+
+# Whether to output commands for the plugin ConsoleLikeChat ($1 is the command to run)
+FORMAT='$1'
+
+# Settings for backups
+# ===============================
+
+# Location for world backups
+BACKUPPATH="/opt/mc/backup/worlds"
+
+# Format for world backup (tar or zip).
+BACKUPFORMAT="tar" 
+
+# Things to leave alone ;)
+# =====================
+
+INVOCATION="java -Xmx$MAXMEM -Xms$INITMEM -XX:+UseConcMarkSweepGC -XX:+CMSIncrementalPacing -XX:ParallelGCThreads=$CPU_COUNT -XX:+AggressiveOpts -jar $SERVICE nogui"
