@@ -7,22 +7,22 @@
 screen, rsync
 
 ##Консоль##
-###Для доступа к консоли###
+Для доступа к консоли
 `service minecraft screen`
 
-###Закрыть консоль###
+Закрыть консоль
 `Ctrl+A D`
 
 ##Установка##
-*Создаем символическую ссылку для файла minecraft в /etc/init.d/minecraft, устанавливаем разрешения и обновляем rc.d.
+1. Создаем символическую ссылку для файла minecraft в /etc/init.d/minecraft, устанавливаем разрешения и обновляем rc.d.
 ```
 sudo ln -s /patch-to-script/minecraft /etc/init.d/minecraft
 chmod 755  ~/patch-to-script/minecraft
 sudo update-rc.d minecraft defaults 99 10
 ```
-1.Правим переменные в config
-2.Перемещаем миры в папку указанную в WORLDSTORAGE
-3.Редактируем crontab
+2. Правим переменные в config
+3. Перемещаем миры в папку указанную в WORLDSTORAGE
+4. Редактируем crontab
   
   `sudo crontab -e`
 
