@@ -14,15 +14,15 @@ screen, rsync
 `Ctrl+A D`
 
 ##Установка##
-1. Создаем символическую ссылку для файла minecraft в /etc/init.d/minecraft, устанавливаем разрешения и обновляем rc.d.
+- Создаем символическую ссылку для файла minecraft в /etc/init.d/minecraft, устанавливаем разрешения и обновляем rc.d.
 ```
 sudo ln -s /patch-to-script/minecraft /etc/init.d/minecraft
 chmod 755  ~/patch-to-script/minecraft
 sudo update-rc.d minecraft defaults 99 10
 ```
-2. Правим переменные в config
-3. Перемещаем миры в папку указанную в WORLDSTORAGE
-4. Редактируем crontab
+- Правим переменные в config
+- Перемещаем миры в папку указанную в WORLDSTORAGE
+- Редактируем crontab
   
   `sudo crontab -e`
 
