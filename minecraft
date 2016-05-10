@@ -36,12 +36,12 @@ then
 	exit
 fi
 
-ME=`whoami`
+ME=$(whoami)
 as_user() {
-	if [ $ME == $USERNAME ] ; then
+	if [ "$ME" == "$USERNAME" ] ; then
 		bash -c "$1"
 	else
-		su $USERNAME -s /bin/bash -c "$1"
+		su "$USERNAME" -s /bin/bash -c "$1"
 	fi
 }
 
